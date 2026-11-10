@@ -77,6 +77,8 @@ def score_candidate(text, key_tag):
     req = urllib.request.Request(ENDPOINT, data=body, headers={
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
+        # urllib's default "Python-urllib" UA trips Groq's Cloudflare (err 1010)
+        "User-Agent": "BiasCure/1.0 (+https://biascure.streamlit.app)",
     })
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
