@@ -2,7 +2,7 @@
 
 **An AI fairness auditor — does a hiring AI score the same résumé differently based only on the applicant's name?**
 
-🔗 **Live demo:** _(add Streamlit link after deploy)_
+🔗 **Live demo:** https://biascure.streamlit.app/
 
 ## What It Does
 
@@ -36,14 +36,14 @@ Hiring AIs are everywhere, and a model can penalize an identical candidate for n
 
 ## Status
 
-✅ Built and tested. Fairness math verified. Runs in **DEMO MODE** (simulated, name-independent scores) with no key; connect a free Groq key for a real audit.
+✅ **Live and working** at https://biascure.streamlit.app/ — real Groq-hosted scorer, end-to-end: paste a résumé → scorecard → name-blind mitigation. Runs in **DEMO MODE** (simulated scores) if no key is set; the live app has a key connected. The app auto-selects whichever model the key can access, so it survives Groq retiring model ids.
 
 **Roadmap:**
 - [x] Pairing engine (name-swapped identical résumés)
 - [x] Bias Scorecard (mean-score gap + interview-rate disparity)
 - [x] Name-blinding mitigation with before/after gap
-- [ ] Public deployment on Streamlit Cloud
-- [ ] Connect live Groq scorer (free API key)
+- [x] Public deployment on Streamlit Cloud
+- [x] Live Groq scorer connected (free API key)
 
 ## Quick Start
 
