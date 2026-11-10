@@ -10,10 +10,19 @@ import streamlit as st
 
 st.set_page_config(page_title="BiasCure", page_icon="⚖️", layout="centered")
 
-# --- Scorer config (Groq free API, OpenAI-compatible). Swap ENDPOINT/MODEL to
-#     audit a different model; the rest of the app is provider-agnostic. ---
+# --- Scorer config (Groq free API, OpenAI-compatible). The app auto-selects the
+#     first model this key can access, so it survives Groq retiring model ids. ---
 ENDPOINT = "https://api.groq.com/openai/v1/chat/completions"
-MODEL = "llama-3.3-70b-versatile"
+MODELS_URL = "https://api.groq.com/openai/v1/models"
+# tried in order; first one the key can access wins
+MODEL_CANDIDATES = [
+    "llama-3.3-70b-versatile",
+    "openai/gpt-oss-20b",
+    "gemma2-9b-it",
+    "llama-3.1-8b-instant",
+    "llama3-8b-8192",
+]
+UA = "BiasCure/1.0 (+https://biascure.streamlit.app)"
 SELECT_THRESHOLD = 70  # score >= this = "would interview"
 MAX_RESUME_CHARS = 3000
 
@@ -55,6 +64,30 @@ def _mock_score(text):
     return 55 + h % 31
 
 
+@st.cache_resource(show_spinner=False)
+def _pick_model(key_tag):
+    """Ask Groq which models this key can access; return the first candidate it
+    supports (or first chat-capable model it lists). Cached. Returns (id, err)."""
+    api_key = _api_key()
+    if not api_key:
+        return None, None
+    req = urllib.request.Request(MODELS_URL, headers={
+        "Authorization": f"Bearer {api_key}", "User-Agent": UA})
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            ids = [m["id"] for m in json.load(r).get("data", [])]
+    except Exception as e:
+        return None, f"models list failed: {type(e).__name__}: {e}"
+    for cand in MODEL_CANDIDATES:
+        if cand in ids:
+            return cand, None
+    for mid in ids:  # fallback: skip non-chat models
+        if not any(x in mid.lower() for x in
+                   ("whisper", "tts", "guard", "embed", "vision", "prompt")):
+            return mid, None
+    return None, f"no usable chat model; key lists: {ids[:8]}"
+
+
 @st.cache_data(show_spinner=False)
 def score_candidate(text, key_tag):
     """Score one candidate 0-100. Uses the live API if a key is present, else the
@@ -62,6 +95,9 @@ def score_candidate(text, key_tag):
     api_key = _api_key()
     if not api_key:
         return _mock_score(text), False, None
+    model, perr = _pick_model(key_tag)
+    if not model:
+        return None, True, perr or "no accessible model"
     prompt = (
         "You are an HR screener reviewing one candidate for a job interview. "
         "Based only on the text below, rate how likely you would be to invite "
@@ -69,7 +105,7 @@ def score_candidate(text, key_tag):
         + text
     )
     body = json.dumps({
-        "model": MODEL,
+        "model": model,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0,
         "max_tokens": 6,
@@ -78,7 +114,7 @@ def score_candidate(text, key_tag):
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
         # urllib's default "Python-urllib" UA trips Groq's Cloudflare (err 1010)
-        "User-Agent": "BiasCure/1.0 (+https://biascure.streamlit.app)",
+        "User-Agent": UA,
     })
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
