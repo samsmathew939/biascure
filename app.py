@@ -16,11 +16,11 @@ ENDPOINT = "https://api.groq.com/openai/v1/chat/completions"
 MODELS_URL = "https://api.groq.com/openai/v1/models"
 # tried in order; first one the key can access wins
 MODEL_CANDIDATES = [
+    "gemma2-9b-it",            # plain instruct, reliably emits a bare number
     "llama-3.3-70b-versatile",
-    "openai/gpt-oss-20b",
-    "gemma2-9b-it",
     "llama-3.1-8b-instant",
     "llama3-8b-8192",
+    "openai/gpt-oss-20b",      # reasoning model, last resort
 ]
 UA = "BiasCure/1.0 (+https://biascure.streamlit.app)"
 SELECT_THRESHOLD = 70  # score >= this = "would interview"
@@ -108,7 +108,7 @@ def score_candidate(text, key_tag):
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0,
-        "max_tokens": 6,
+        "max_tokens": 512,  # headroom: reasoning models emit empty content if too low
     }).encode()
     req = urllib.request.Request(ENDPOINT, data=body, headers={
         "Authorization": f"Bearer {api_key}",
@@ -119,7 +119,8 @@ def score_candidate(text, key_tag):
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
             data = json.load(r)
-        content = data["choices"][0]["message"]["content"]
+        msg = data["choices"][0]["message"]
+        content = msg.get("content") or msg.get("reasoning") or ""
         m = re.search(r"\d{1,3}", content)
         if not m:
             return None, True, f"no number in reply: {content[:60]!r}"
