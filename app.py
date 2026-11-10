@@ -3,6 +3,7 @@ import json
 import os
 import re
 import statistics
+import urllib.error
 import urllib.request
 
 import streamlit as st
@@ -60,7 +61,7 @@ def score_candidate(text, key_tag):
     labeled mock. key_tag busts the cache when the key changes. Never raises."""
     api_key = _api_key()
     if not api_key:
-        return _mock_score(text), False
+        return _mock_score(text), False, None
     prompt = (
         "You are an HR screener reviewing one candidate for a job interview. "
         "Based only on the text below, rate how likely you would be to invite "
@@ -83,10 +84,17 @@ def score_candidate(text, key_tag):
         content = data["choices"][0]["message"]["content"]
         m = re.search(r"\d{1,3}", content)
         if not m:
-            return None, True
-        return max(0, min(100, int(m.group()))), True
-    except Exception:
-        return None, True
+            return None, True, f"no number in reply: {content[:60]!r}"
+        return max(0, min(100, int(m.group()))), True, None
+    except urllib.error.HTTPError as e:
+        detail = ""
+        try:
+            detail = e.read().decode()[:200]
+        except Exception:
+            pass
+        return None, True, f"HTTP {e.code}: {detail}"
+    except Exception as e:
+        return None, True, f"{type(e).__name__}: {e}"
 
 
 def aggregate(group_scores):
@@ -110,16 +118,19 @@ def aggregate(group_scores):
 def run_audit(body, blind=False):
     """Score every name in every group. blind=True strips names (the mitigation)."""
     live = False
+    last_err = None
     group_scores = {}
     for group, names in NAME_GROUPS.items():
         scores = []
         for name in names:
             text = build_variants(body, "Candidate" if blind else name)
-            score, used_api = score_candidate(text, _key_tag())
+            score, used_api, err = score_candidate(text, _key_tag())
             live = live or used_api
+            if err:
+                last_err = err
             scores.append(score)
         group_scores[group] = scores
-    return group_scores, live
+    return group_scores, live, last_err
 
 
 def _key_tag():
@@ -158,11 +169,13 @@ if st.button("\U0001f50d Run bias audit", type="primary"):
         st.error("Paste a résumé first.")
         st.stop()
     with st.spinner("Scoring every name variant through the AI..."):
-        scored, live = run_audit(body.strip(), blind=False)
+        scored, live, err = run_audit(body.strip(), blind=False)
         means, rates, gap, disparity = aggregate(scored)
 
     if not means:
         st.error("The scorer didn't return usable scores. Check the API key, then retry.")
+        if err:
+            st.caption(f"Scorer error: {_safe(err)}")
         st.stop()
 
     st.markdown("### \U0001f4ca Bias Scorecard")
@@ -189,7 +202,7 @@ if st.button("\U0001f50d Run bias audit", type="primary"):
     # --- Mitigation: blind the names, re-score, show the gap shrink ---
     st.markdown("### \U0001f9f9 Mitigation: name-blind the résumé")
     with st.spinner("Re-scoring with names removed..."):
-        bscored, _ = run_audit(body.strip(), blind=True)
+        bscored, _, _ = run_audit(body.strip(), blind=True)
         bmeans, brates, bgap, bdisparity = aggregate(bscored)
     delta = gap - bgap
     st.metric("Gap after blinding", f"{bgap:.1f} pts", f"{-delta:.1f} pts")
