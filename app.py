@@ -13,7 +13,7 @@ st.set_page_config(page_title="BiasCure", page_icon="⚖️", layout="centered")
 # --- Scorer config (Groq free API, OpenAI-compatible). Swap ENDPOINT/MODEL to
 #     audit a different model; the rest of the app is provider-agnostic. ---
 ENDPOINT = "https://api.groq.com/openai/v1/chat/completions"
-MODEL = "llama-3.1-8b-instant"
+MODEL = "llama-3.3-70b-versatile"
 SELECT_THRESHOLD = 70  # score >= this = "would interview"
 MAX_RESUME_CHARS = 3000
 
