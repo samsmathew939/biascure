@@ -206,8 +206,11 @@ def extract_text(upload):
         if name.endswith(".docx"):
             import zipfile
             with zipfile.ZipFile(io.BytesIO(data)) as z:
-                if z.getinfo("word/document.xml").file_size > MAX_DOCX_XML:
-                    return None  # zip-bomb guard
+                infos = z.infolist()
+                # zip-bomb guard: cap total uncompressed size AND entry count
+                # across the whole package, not just document.xml
+                if len(infos) > 300 or sum(i.file_size for i in infos) > MAX_DOCX_XML:
+                    return None
             from docx import Document
             doc = Document(io.BytesIO(data))
             parts, total = [], 0
