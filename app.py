@@ -177,22 +177,47 @@ def _key_tag():
     return hashlib.sha256(k.encode()).hexdigest()[:8] if k else "demo"
 
 
+MAX_UPLOAD_BYTES = 5_000_000   # reject anything bigger before parsing
+MAX_PDF_PAGES = 25             # cap pages scanned (résumés are short)
+MAX_DOCX_XML = 20_000_000      # reject zip-bomb .docx (inflated document.xml)
+
+
 def extract_text(upload):
     """Pull plain text from an uploaded PDF, Word (.docx), Markdown, or text file.
-    Returns the text, or None if it can't be read. Never raises."""
+    Bounds work at every step (size, pages, chars) so a crafted file can't exhaust
+    memory/CPU. Returns the text, or None if unreadable/oversized. Never raises."""
     import io
     name = upload.name.lower()
     data = upload.getvalue()
+    if not data or len(data) > MAX_UPLOAD_BYTES:
+        return None
     try:
         if name.endswith(".pdf"):
             from pypdf import PdfReader
             reader = PdfReader(io.BytesIO(data))
-            return "\n".join((p.extract_text() or "") for p in reader.pages).strip()
+            parts, total = [], 0
+            for page in reader.pages[:MAX_PDF_PAGES]:
+                t = page.extract_text() or ""
+                parts.append(t)
+                total += len(t)
+                if total >= MAX_RESUME_CHARS:  # stop early once we have enough
+                    break
+            return "\n".join(parts).strip()[:MAX_RESUME_CHARS]
         if name.endswith(".docx"):
+            import zipfile
+            with zipfile.ZipFile(io.BytesIO(data)) as z:
+                if z.getinfo("word/document.xml").file_size > MAX_DOCX_XML:
+                    return None  # zip-bomb guard
             from docx import Document
             doc = Document(io.BytesIO(data))
-            return "\n".join(p.text for p in doc.paragraphs).strip()
-        return data.decode("utf-8", errors="ignore").strip()  # md / txt
+            parts, total = [], 0
+            for para in doc.paragraphs:
+                parts.append(para.text)
+                total += len(para.text)
+                if total >= MAX_RESUME_CHARS:
+                    break
+            return "\n".join(parts).strip()[:MAX_RESUME_CHARS]
+        return data.decode("utf-8", errors="ignore").strip()[:MAX_RESUME_CHARS]  # md / txt
     except Exception:
         return None
 
