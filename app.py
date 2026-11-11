@@ -177,6 +177,26 @@ def _key_tag():
     return hashlib.sha256(k.encode()).hexdigest()[:8] if k else "demo"
 
 
+def extract_text(upload):
+    """Pull plain text from an uploaded PDF, Word (.docx), Markdown, or text file.
+    Returns the text, or None if it can't be read. Never raises."""
+    import io
+    name = upload.name.lower()
+    data = upload.getvalue()
+    try:
+        if name.endswith(".pdf"):
+            from pypdf import PdfReader
+            reader = PdfReader(io.BytesIO(data))
+            return "\n".join((p.extract_text() or "") for p in reader.pages).strip()
+        if name.endswith(".docx"):
+            from docx import Document
+            doc = Document(io.BytesIO(data))
+            return "\n".join(p.text for p in doc.paragraphs).strip()
+        return data.decode("utf-8", errors="ignore").strip()  # md / txt
+    except Exception:
+        return None
+
+
 # ---------------- UI ----------------
 st.title("⚖️ BiasCure")
 st.write("Audit a hiring AI for name bias. Same résumé, different names — does the score change?")
@@ -189,14 +209,30 @@ if not _api_key():
     )
 
 st.info(
-    "**How it works:** paste a résumé **without a name**. BiasCure attaches names "
-    "associated with different demographic groups (from the Bertrand & Mullainathan "
+    "**How it works:** upload or paste a résumé **without a name**. BiasCure attaches "
+    "names associated with different demographic groups (from the Bertrand & Mullainathan "
     "2004 study), scores each identical résumé through the same AI, and measures the "
     "gap. Then it re-runs **name-blinded** to show the gap shrink."
 )
 
+upload = st.file_uploader(
+    "Upload a résumé (PDF, Word .docx, Markdown, or text):",
+    type=["pdf", "docx", "md", "txt"],
+)
+file_text = None
+if upload:
+    file_text = extract_text(upload)
+    if file_text:
+        file_text = file_text[:MAX_RESUME_CHARS]
+        st.caption(
+            f"✅ Loaded {len(file_text)} characters from {_safe(upload.name)}. "
+            "Tip: delete the applicant's real name from the file for the cleanest audit."
+        )
+    else:
+        st.warning("Couldn't read that file — paste the text below instead.")
+
 body = st.text_area(
-    "Résumé / candidate description (no name):",
+    "…or paste a résumé / candidate description (no name):",
     height=180,
     max_chars=MAX_RESUME_CHARS,
     placeholder="Software engineer, 4 years experience in Python and cloud infrastructure. "
@@ -204,11 +240,12 @@ body = st.text_area(
 )
 
 if st.button("\U0001f50d Run bias audit", type="primary"):
-    if not body.strip():
-        st.error("Paste a résumé first.")
+    source = (file_text or body).strip()
+    if not source:
+        st.error("Upload a file or paste a résumé first.")
         st.stop()
     with st.spinner("Scoring every name variant through the AI..."):
-        scored, live, err = run_audit(body.strip(), blind=False)
+        scored, live, err = run_audit(source, blind=False)
         means, rates, gap, disparity = aggregate(scored)
 
     if not means:
@@ -241,7 +278,7 @@ if st.button("\U0001f50d Run bias audit", type="primary"):
     # --- Mitigation: blind the names, re-score, show the gap shrink ---
     st.markdown("### \U0001f9f9 Mitigation: name-blind the résumé")
     with st.spinner("Re-scoring with names removed..."):
-        bscored, _, _ = run_audit(body.strip(), blind=True)
+        bscored, _, _ = run_audit(source, blind=True)
         bmeans, brates, bgap, bdisparity = aggregate(bscored)
     delta = gap - bgap
     st.metric("Gap after blinding", f"{bgap:.1f} pts", f"{-delta:.1f} pts")
