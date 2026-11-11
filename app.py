@@ -59,7 +59,9 @@ def build_variants(body, name):
 def _mock_score(text):
     """Deterministic placeholder score (DEMO MODE). Name-independent by design —
     it only exercises the UI; a real audit needs a live scorer (add a key)."""
-    h = int(hashlib.sha256(text.encode()).hexdigest(), 16)
+    # drop the injected "Applicant name: ..." line so the mock ignores the name
+    body = re.sub(r"^Applicant name:.*\n\n?", "", text)
+    h = int(hashlib.sha256(body.encode()).hexdigest(), 16)
     # stable 55-85 range, driven by résumé content hash, not the name
     return 55 + h % 31
 
@@ -227,20 +229,22 @@ def extract_text(upload):
 
 # ---------------- UI ----------------
 st.title("⚖️ BiasCure")
-st.write("Audit a hiring AI for name bias. Same résumé, different names — does the score change?")
+st.write(
+    "**Does an AI hiring tool judge the person — or their name?** BiasCure runs the "
+    "*same résumé* past an AI screener under different names and shows you whether the "
+    "score stays fair."
+)
 
 if not _api_key():
     st.warning(
-        "\U0001f9ea **DEMO MODE** — no scorer connected, so scores are simulated and "
-        "name-independent (the gap will read ~0). Add a free Groq API key in "
-        "Streamlit secrets as `GROQ_API_KEY` to run a real audit."
+        "\U0001f9ea **DEMO MODE** — no AI scorer connected, so scores are simulated "
+        "(the gap will read about 0). Add a free Groq API key in Streamlit secrets as "
+        "`GROQ_API_KEY` to run a real audit."
     )
 
-st.info(
-    "**How it works:** upload or paste a résumé **without a name**. BiasCure attaches "
-    "names associated with different demographic groups (from the Bertrand & Mullainathan "
-    "2004 study), scores each identical résumé through the same AI, and measures the "
-    "gap. Then it re-runs **name-blinded** to show the gap shrink."
+st.caption(
+    "Upload or paste a résumé below. It works best with **no name on it** — "
+    "BiasCure adds the test names itself."
 )
 
 upload = st.file_uploader(
@@ -252,10 +256,7 @@ if upload:
     file_text = extract_text(upload)
     if file_text:
         file_text = file_text[:MAX_RESUME_CHARS]
-        st.caption(
-            f"✅ Loaded {len(file_text)} characters from {_safe(upload.name)}. "
-            "Tip: delete the applicant's real name from the file for the cleanest audit."
-        )
+        st.caption(f"✅ Loaded {len(file_text)} characters from {_safe(upload.name)}.")
     else:
         st.warning("Couldn't read that file — paste the text below instead.")
 
@@ -287,81 +288,67 @@ if st.button("\U0001f50d Run bias audit", type="primary"):
     lo = min(groups, key=lambda g: means[g])
     biased = gap >= 5 or disparity >= 0.10
 
-    # ---- 1. The answer, in one plain sentence ----
-    st.markdown("## \U0001f4ca Result")
+    ex = {g: " & ".join(NAME_GROUPS[g][:2]) for g in groups}
+
+    # ---- The verdict, in one plain sentence ----
     if biased:
         st.error(
-            f"### ⚠️ This AI favored one group.\n"
-            f"The **exact same résumé** scored **{gap:.0f} points higher** when it had "
-            f"**{hi.lower()}** instead of **{lo.lower()}**."
+            f"## ⚠️ Not fair\n"
+            f"The AI gave the **exact same résumé {gap:.0f} points more** when it carried "
+            f"{hi.lower()} than {lo.lower()} — a difference based on nothing but the name."
         )
     else:
         st.success(
-            f"### ✅ This AI looks fair on this résumé.\n"
-            f"Scores stayed within **{gap:.1f} points** no matter which names were attached."
+            f"## ✅ Fair\n"
+            f"The AI scored the same résumé within **{gap:.1f} points** no matter which "
+            "name it carried."
         )
 
-    # ---- 2. Visual: one bar per group, same résumé each time ----
-    st.markdown("#### Average score each group got (same résumé, only the name changed)")
+    # ---- The evidence: same résumé, different names ----
+    st.markdown("**Same résumé. Different names. Here's the score the AI gave each:**")
     for g in groups:
-        flag = "  ⬅ highest" if g == hi and biased else ""
-        st.write(f"**{g}** — {means[g]:.0f} / 100{flag}")
+        tag = "  ⬅ highest" if (biased and g == hi) else ""
+        st.write(f"{g} (like {ex[g]}) — **{means[g]:.0f} / 100**{tag}")
         st.progress(min(max(means[g] / 100, 0.0), 1.0))
 
-    # ---- 3. Exact numbers in a clean table ----
-    st.markdown("#### The numbers")
-    st.dataframe(
-        {
-            "Name group": groups,
-            "Avg score (0–100)": [round(means[g], 1) for g in groups],
-            "Got an interview": [f"{rates[g]:.0%}" for g in groups],
-        },
-        hide_index=True,
-        use_container_width=True,
-    )
-
-    # ---- 4. The two headline gaps, explained ----
-    c1, c2 = st.columns(2)
-    c1.metric(
-        "Score gap", f"{gap:.1f} pts",
-        help="Difference between the two groups' average scores. 0 = perfectly fair.",
-    )
-    c2.metric(
-        "Interview-rate gap", f"{disparity:.0%}",
-        help=f"Difference in how often each group cleared the interview bar "
-             f"(score ≥ {SELECT_THRESHOLD}). 0 = perfectly fair.",
-    )
-    st.caption(
-        "Rule of thumb: a score gap **under 2 pts** is negligible, **2–5 pts** is "
-        "worth a look, and **5+ pts** is a real bias signal. Lower is fairer — "
-        "a fair AI gives identical résumés identical scores."
-    )
-
-    # ---- 5. Mitigation: hide the names, re-score, show before vs after ----
-    st.markdown("## \U0001f9f9 The fix: hide the names")
-    with st.spinner("Re-scoring with every name removed..."):
-        bscored, _, _ = run_audit(source, blind=True)
-        bmeans, brates, bgap, bdisparity = aggregate(bscored)
-    delta = gap - bgap
-    m1, m2 = st.columns(2)
-    m1.metric("Gap WITH names", f"{gap:.1f} pts")
-    m2.metric("Gap WITHOUT names", f"{bgap:.1f} pts", f"{-delta:.1f} pts", delta_color="inverse")
-    if delta > 0.5:
-        st.success(
-            f"**Blinding the names cut the gap from {gap:.1f} to {bgap:.1f} pts.** "
-            "Stripping names before an AI scores a résumé is a simple, real fix."
+    # ---- One plain takeaway ----
+    if biased:
+        st.markdown(
+            "A fair AI gives identical résumés identical scores. Scoring someone higher or "
+            "lower because of their name — a stand-in for race or gender — is exactly the "
+            "bias this project is built to catch."
         )
     else:
-        st.info(
-            f"Gap without names: {bgap:.1f} pts (was {gap:.1f}). On this résumé the AI "
-            "was already even-handed, so blinding changed little."
+        st.markdown(
+            "That's what fairness looks like: identical résumés get identical scores, "
+            "whatever name is on top."
+        )
+
+    # ---- The fix: one line, proof tucked away ----
+    with st.spinner("Checking the fix..."):
+        bscored, _, _ = run_audit(source, blind=True)
+        _, _, bgap, _ = aggregate(bscored)
+    st.markdown(
+        "**The fix is simple:** take names off résumés before the AI grades them, so it "
+        "can only judge the experience."
+    )
+    with st.expander("See proof the fix works"):
+        st.write(
+            f"With names on, the gap was **{gap:.1f} points**. "
+            f"With names removed, it dropped to **{bgap:.1f} points**."
+        )
+        st.caption(
+            "Hiding names shrank the bias — a real, usable fix."
+            if gap - bgap > 0.5
+            else "This résumé was already scored evenly, so there was little gap to close."
         )
 
     st.caption(
-        "This audits only the one model it's pointed at — not “all AI.” Small samples are "
-        "noisy, so treat results as illustrative. Names reflect *perceived* associations "
-        "measured by Bertrand & Mullainathan (2004), not facts about any person."
-        + ("" if live else " — **Scores above are simulated (DEMO MODE).**")
+        "Honest limits: this checks only the one AI model it's connected to, not “all AI,” "
+        "and small samples are noisy — treat it as a demonstration. Test names come from "
+        "Bertrand & Mullainathan’s 2004 résumé-bias study and reflect *perceived* "
+        "associations, not facts about any person."
+        + ("" if live else " **Scores here are simulated (DEMO MODE).**")
     )
 
 st.markdown("---")
