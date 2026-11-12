@@ -66,4 +66,4 @@ To run a **real** audit, get a free key at console.groq.com (no card), then eith
 
 ---
 
-Built by Sam Mathew — open source. Part of a 3-project AI portfolio (perception · responsible AI · prediction).
+Built by Sam Mathew — open source.
