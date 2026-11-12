@@ -2,3 +2,4 @@
 __pycache__/
 .streamlit/secrets.toml
 RESUME_STATE.md
+.playwright-cli/
